@@ -15,6 +15,7 @@ from .image_grounding import (
     ImageGroundingTool,
     image_grounding_tool,
 )
+from .image_ocr import ImageOCRArgs, ImageOCRTool, OCRBlock, OCRResult, image_ocr_tool
 from .image_segment import ImageSegmentArgs, ImageSegmentTool, image_segment_tool
 from .image_understand import (
     ImageAttribute,
@@ -39,12 +40,16 @@ __all__ = [
     "CropMode",
     "ImageCollageArgs",
     "ImageCollageTool",
+    "ImageOCRArgs",
+    "ImageOCRTool",
     "ImageAttribute",
     "ImageCropArgs",
     "ImageCropTool",
     "ImageGroundingArgs",
     "ImageGroundingResult",
     "ImageGroundingTool",
+    "OCRBlock",
+    "OCRResult",
     "ImageSegmentArgs",
     "ImageSegmentTool",
     "ImageUnderstandArgs",
@@ -59,6 +64,7 @@ __all__ = [
     "image_collage_tool",
     "image_crop_tool",
     "image_grounding_tool",
+    "image_ocr_tool",
     "image_segment_tool",
     "image_understand_tool",
     "prompt_reconstruct_tool",
