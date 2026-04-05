@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fig-edit-agent"
+version = "0.1.0"
+description = "Streamlined schema framework for a DAG + multi-agent image editing system"
+requires-python = ">=3.10"
+dependencies = [
+  "pydantic>=2.8,<3",
+  "pydantic-settings>=2.4,<3",
+  "python-dotenv>=1.0,<2",
+  "openai>=1.0",
+  "pillow>=10,<12",
+  "numpy>=1.26,<3",
+]
+
+[tool.setuptools]
+packages = [
+  "fig_edit_agent",
+  "fig_edit_agent.core",
+  "fig_edit_agent.schemas",
+  "fig_edit_agent.tools",
+]
+
+[tool.setuptools.package-dir]
+"fig_edit_agent" = "."
+"fig_edit_agent.core" = "core"
+"fig_edit_agent.schemas" = "schemas"
+"fig_edit_agent.tools" = "tools"
