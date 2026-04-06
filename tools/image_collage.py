@@ -25,6 +25,10 @@ from ..schemas import (
 from .base import ArtifactRegistry, BaseTool, ToolContext, ToolResult, to_model_image_url
 from .registry import tool_registry
 
+MAX_CANVAS_WIDTH = 4096
+MAX_CANVAS_HEIGHT = 4096
+MAX_CANVAS_PIXELS = 16_777_216  # 4096 * 4096
+
 
 class ImageCollageArgs(StrictSchema):
     """Arguments for collage layout generation."""
@@ -81,6 +85,12 @@ class CollageLayoutResult(StrictSchema):
         artifact_ids = [item.artifact_id for item in self.items]
         if len(set(artifact_ids)) != len(artifact_ids):
             raise ValueError("Each artifact_id may appear at most once in the collage layout")
+        if self.canvas_width > MAX_CANVAS_WIDTH:
+            raise ValueError(f"canvas_width must be <= {MAX_CANVAS_WIDTH}")
+        if self.canvas_height > MAX_CANVAS_HEIGHT:
+            raise ValueError(f"canvas_height must be <= {MAX_CANVAS_HEIGHT}")
+        if self.canvas_width * self.canvas_height > MAX_CANVAS_PIXELS:
+            raise ValueError(f"canvas pixel count must be <= {MAX_CANVAS_PIXELS}")
         return self
 
 
@@ -123,7 +133,7 @@ class ImageCollageTool(BaseTool[ImageCollageArgs]):
         layout = await self._plan_layout(ctx=ctx, args=args, image_artifacts=image_artifacts)
         self._validate_layout(layout=layout, input_ids=args.image_artifact_ids)
 
-        canvas, placements = self._render_collage(layout=layout, image_artifacts=image_artifacts)
+        canvas, placements = await self._render_collage(layout=layout, image_artifacts=image_artifacts)
         output_path = self._write_collage(canvas, attempt_id=ctx.attempt_id)
 
         collage_artifact_id = f"artifact_{uuid4().hex}"
@@ -182,6 +192,9 @@ class ImageCollageTool(BaseTool[ImageCollageArgs]):
                     "- Use every provided artifact exactly once.\n"
                     "- Output only a CollageLayoutResult.\n"
                     "- canvas_width and canvas_height must be just large enough to contain the arranged items.\n"
+                    f"- canvas_width must not exceed {MAX_CANVAS_WIDTH}.\n"
+                    f"- canvas_height must not exceed {MAX_CANVAS_HEIGHT}.\n"
+                    f"- canvas_width * canvas_height must not exceed {MAX_CANVAS_PIXELS}.\n"
                     "- x and y are the top-left coordinates of each transformed image on the final canvas.\n"
                     "- width and height are the resized dimensions before rotation.\n"
                     "- rotation is in degrees counterclockwise.\n"
@@ -201,7 +214,8 @@ class ImageCollageTool(BaseTool[ImageCollageArgs]):
                 "content": (
                     "You are a layout planner for image collages. "
                     "Given several source images and a layout instruction, produce a compact, valid layout plan. "
-                    "Use every input image exactly once and choose canvas dimensions that fully contain the final composition."
+                    "Use every input image exactly once and choose canvas dimensions that fully contain the final composition "
+                    f"without exceeding {MAX_CANVAS_WIDTH}x{MAX_CANVAS_HEIGHT} or {MAX_CANVAS_PIXELS} total pixels."
                 ),
             },
             {"role": "user", "content": content},
@@ -222,8 +236,18 @@ class ImageCollageTool(BaseTool[ImageCollageArgs]):
         missing_ids = [artifact_id for artifact_id in input_ids if artifact_id not in set(layout_ids)]
         if missing_ids:
             raise ValueError(f"Collage layout omitted required artifact ids: {missing_ids}")
+        if layout.canvas_width > MAX_CANVAS_WIDTH or layout.canvas_height > MAX_CANVAS_HEIGHT:
+            raise ValueError(
+                f"Collage canvas exceeds max size: {layout.canvas_width}x{layout.canvas_height} "
+                f"(limit {MAX_CANVAS_WIDTH}x{MAX_CANVAS_HEIGHT})"
+            )
+        if layout.canvas_width * layout.canvas_height > MAX_CANVAS_PIXELS:
+            raise ValueError(
+                f"Collage canvas pixel count exceeds limit: "
+                f"{layout.canvas_width * layout.canvas_height} > {MAX_CANVAS_PIXELS}"
+            )
 
-    def _render_collage(
+    async def _render_collage(
         self,
         *,
         layout: CollageLayoutResult,
@@ -235,10 +259,15 @@ class ImageCollageTool(BaseTool[ImageCollageArgs]):
         indexed_items = list(enumerate(layout.items))
         indexed_items.sort(key=lambda pair: (pair[1].z_index, pair[0]))
 
+        layers = await asyncio.gather(
+            *[
+                asyncio.to_thread(self._prepare_layer, item=item, artifact=artifact_map[item.artifact_id])
+                for _, item in indexed_items
+            ]
+        )
+
         placements: list[PlacementRecord] = []
-        for _, item in indexed_items:
-            artifact = artifact_map[item.artifact_id]
-            layer = self._prepare_layer(item=item, artifact=artifact)
+        for (_, item), layer in zip(indexed_items, layers, strict=True):
             self._assert_within_canvas(layer=layer, canvas_width=layout.canvas_width, canvas_height=layout.canvas_height)
             canvas.alpha_composite(layer.image, dest=(item.x, item.y))
             placements.append(
@@ -256,6 +285,8 @@ class ImageCollageTool(BaseTool[ImageCollageArgs]):
         with Image.open(source_path) as source_image:
             source_rgba = source_image.convert("RGBA")
             original_width, original_height = source_rgba.size
+            # Keep the transform pipeline to exactly one resize and one rotate to
+            # minimize cumulative resampling loss.
             resized = source_rgba.resize((item.width, item.height), Image.Resampling.LANCZOS)
             rotated = resized.rotate(item.rotation, expand=True, resample=Image.Resampling.BICUBIC)
 
