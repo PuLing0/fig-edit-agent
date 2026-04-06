@@ -28,6 +28,7 @@ from .image_understand import (
 from .prompt_reconstruct import (
     PromptReconstructArgs,
     PromptReconstructResult,
+    ReferenceRewrite,
     PromptReconstructTool,
     prompt_reconstruct_tool,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "ImageUnderstandTool",
     "PromptReconstructArgs",
     "PromptReconstructResult",
+    "ReferenceRewrite",
     "PromptReconstructTool",
     "ToolContext",
     "ToolRegistry",
