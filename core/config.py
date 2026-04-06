@@ -58,6 +58,82 @@ class AgentSettings(BaseSettings):
         default=False,
         description="Whether to enable torch.compile when constructing the SAM3 image model.",
     )
+    firered_repo_path: str = Field(
+        default="/Users/sijuzheng/research/project/Fig-Edit/FireRed-Image-Edit",
+        description="Local filesystem path to the FireRed-Image-Edit repository root.",
+    )
+    firered_model_path: str = Field(
+        default="FireRedTeam/FireRed-Image-Edit-1.0",
+        description="Path to the FireRed model or Hugging Face model id.",
+    )
+    firered_local_files_only: bool = Field(
+        default=False,
+        description="Whether FireRed model loading should only use local files.",
+    )
+    firered_cuda_visible_devices: str | None = Field(
+        default=None,
+        description="Optional CUDA_VISIBLE_DEVICES value used to restrict which physical GPU(s) FireRed can see.",
+    )
+    firered_device_map: str | None = Field(
+        default=None,
+        description="Optional FireRed device map, e.g. 'balanced' or 'auto'.",
+    )
+    firered_per_gpu_max_memory: str | None = Field(
+        default=None,
+        description="Optional per-visible-GPU memory budget such as '22GiB'.",
+    )
+    firered_cpu_max_memory: str = Field(
+        default="128GiB",
+        description="CPU RAM budget used together with firered_per_gpu_max_memory.",
+    )
+    firered_generator_device: str = Field(
+        default="auto",
+        description="Torch generator device for FireRed, e.g. 'auto' or 'cuda:0'.",
+    )
+    firered_enable_attention_slicing: bool = Field(
+        default=False,
+        description="Whether to enable attention slicing for FireRed inference.",
+    )
+    firered_lora_path: str | None = Field(
+        default=None,
+        description="Optional LoRA path for FireRed inference.",
+    )
+    firered_lora_weight_name: str | None = Field(
+        default=None,
+        description="Optional LoRA weight file name inside firered_lora_path.",
+    )
+    firered_lora_adapter_name: str = Field(
+        default="demo",
+        description="Adapter name used when loading FireRed LoRA weights.",
+    )
+    firered_fuse_lora: bool = Field(
+        default=False,
+        description="Whether to fuse FireRed LoRA weights after loading.",
+    )
+    firered_optimized: bool = Field(
+        default=False,
+        description="Whether to use FireRed's optimized fast pipeline path.",
+    )
+    firered_num_inference_steps: int = Field(
+        default=40,
+        description="Number of FireRed diffusion inference steps.",
+    )
+    firered_true_cfg_scale: float = Field(
+        default=4.0,
+        description="FireRed true CFG scale.",
+    )
+    firered_guidance_scale: float = Field(
+        default=1.0,
+        description="FireRed guidance scale.",
+    )
+    firered_negative_prompt: str = Field(
+        default=" ",
+        description="Negative prompt passed into FireRed.",
+    )
+    firered_seed: int = Field(
+        default=49,
+        description="Random seed used for FireRed generation.",
+    )
 
 
 settings = AgentSettings()

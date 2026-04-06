@@ -15,6 +15,7 @@ from .image_grounding import (
     ImageGroundingTool,
     image_grounding_tool,
 )
+from .image_edit import ImageEditArgs, ImageEditTool, image_edit_tool
 from .image_ocr import ImageOCRArgs, ImageOCRTool, OCRBlock, OCRResult, image_ocr_tool
 from .image_score import ImageScoreArgs, ImageScoreResult, ImageScoreTool, image_score_tool
 from .image_segment import ImageSegmentArgs, ImageSegmentTool, image_segment_tool
@@ -50,6 +51,8 @@ __all__ = [
     "ImageAttribute",
     "ImageCropArgs",
     "ImageCropTool",
+    "ImageEditArgs",
+    "ImageEditTool",
     "ImageGroundingArgs",
     "ImageGroundingResult",
     "ImageGroundingTool",
@@ -69,6 +72,7 @@ __all__ = [
     "ToolResult",
     "image_collage_tool",
     "image_crop_tool",
+    "image_edit_tool",
     "image_grounding_tool",
     "image_ocr_tool",
     "image_score_tool",
