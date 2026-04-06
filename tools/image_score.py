@@ -1,18 +1,21 @@
-"""Tool for scoring an image against an expected task objective."""
+"""Tool for rubric-based scoring of an image against an expected task objective."""
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from PIL import Image
-from pydantic import Field, model_validator
+from pydantic import Field, computed_field
 
 from ..core import LLMClient
 from ..schemas import ArtifactType, CoordinateInfo, Identifier, NonEmptyStr, StrictSchema
 from .base import ArtifactRegistry, BaseTool, ToolContext, ToolResult, to_model_image_url
 from .registry import tool_registry
+
+
+ScoreValue = Literal[0, 1, 2]
 
 
 class ImageScoreArgs(StrictSchema):
@@ -30,41 +33,45 @@ class ImageScoreArgs(StrictSchema):
     )
 
 
-class ScoreDimension(StrictSchema):
-    """One named scoring dimension."""
+class _RubricScoreResponse(StrictSchema):
+    """LLM-facing rubric score response without computed overall_score."""
 
-    name: NonEmptyStr = Field(description="Short score dimension name, e.g. prompt_alignment.")
-    value: float = Field(description="Dimension score in [0, 1].")
-
-    @model_validator(mode="after")
-    def validate_value(self) -> "ScoreDimension":
-        if not 0.0 <= self.value <= 1.0:
-            raise ValueError("ScoreDimension.value must be within [0, 1]")
-        return self
+    prompt_alignment: ScoreValue = Field(description="0, 1, or 2 based on prompt alignment.")
+    visual_quality: ScoreValue = Field(description="0, 1, or 2 based on visual quality.")
+    text_accuracy: ScoreValue = Field(description="0, 1, or 2 based on text accuracy.")
+    composition_aesthetics: ScoreValue = Field(description="0, 1, or 2 based on composition and aesthetics.")
+    subject_consistency: ScoreValue = Field(description="0, 1, or 2 based on subject consistency.")
+    summary: NonEmptyStr = Field(description="Short explanation of deductions and reasoning.")
 
 
 class ImageScoreResult(StrictSchema):
-    """Structured score result returned by the model."""
+    """Final structured image score with a computed overall score."""
 
-    overall_score: float = Field(description="Overall image quality / goal completion score in [0, 1].")
-    dimension_scores: list[ScoreDimension] = Field(
-        default_factory=list,
-        description="Optional named sub-scores chosen by the model.",
-    )
-    summary: NonEmptyStr = Field(description="Short evaluation summary.")
+    prompt_alignment: ScoreValue = Field(description="0, 1, or 2 based on prompt alignment.")
+    visual_quality: ScoreValue = Field(description="0, 1, or 2 based on visual quality.")
+    text_accuracy: ScoreValue = Field(description="0, 1, or 2 based on text accuracy.")
+    composition_aesthetics: ScoreValue = Field(description="0, 1, or 2 based on composition and aesthetics.")
+    subject_consistency: ScoreValue = Field(description="0, 1, or 2 based on subject consistency.")
+    summary: NonEmptyStr = Field(description="Short explanation of deductions and reasoning.")
 
-    @model_validator(mode="after")
-    def validate_scores(self) -> "ImageScoreResult":
-        if not 0.0 <= self.overall_score <= 1.0:
-            raise ValueError("overall_score must be within [0, 1]")
-        return self
+    @computed_field(return_type=float)
+    @property
+    def overall_score(self) -> float:
+        total = (
+            self.prompt_alignment
+            + self.visual_quality
+            + self.text_accuracy
+            + self.composition_aesthetics
+            + self.subject_consistency
+        )
+        return total / 10.0
 
 
 class ImageScoreTool(BaseTool[ImageScoreArgs]):
-    """LLM-driven scoring tool for image outputs."""
+    """LLM-driven rubric scoring tool for image outputs."""
 
     name = "image_score"
-    description = "Score an image against an expected task objective."
+    description = "Score an image against an expected task objective using a fixed five-dimension rubric."
     args_model = ImageScoreArgs
 
     async def run(self, ctx: ToolContext, args: ImageScoreArgs) -> ToolResult:
@@ -74,12 +81,32 @@ class ImageScoreTool(BaseTool[ImageScoreArgs]):
                 "role": "system",
                 "content": (
                     "You are a strict image evaluation assistant. "
-                    "Score how well the provided image satisfies the expected task objective. "
-                    "All scores must be within [0, 1]. "
-                    "overall_score should summarize overall completion quality. "
-                    "dimension_scores may include any relevant dimensions you judge useful, "
-                    "using short names such as prompt_alignment, visual_quality, text_accuracy, "
-                    "composition, or subject_consistency."
+                    "You must score the image using exactly five fixed rubric dimensions, and each dimension must be an integer: 0, 1, or 2. "
+                    "Do not invent new dimensions. Do not output floating-point sub-scores. "
+                    "Do not output overall_score; the program will compute it.\n\n"
+                    "Rubric:\n"
+                    "1) prompt_alignment\n"
+                    "- 0: The image clearly fails to satisfy the expected task objective.\n"
+                    "- 1: The image partially satisfies the task objective but has important deviations.\n"
+                    "- 2: The image strongly matches the expected task objective.\n\n"
+                    "2) visual_quality\n"
+                    "- 0: Severe blur, artifacts, distortion, or obvious visual failure.\n"
+                    "- 1: Usable but with noticeable visual issues.\n"
+                    "- 2: Clear, natural, and visually strong.\n\n"
+                    "3) text_accuracy\n"
+                    "- 0: The task involves text and the text is missing, unreadable, or seriously incorrect.\n"
+                    "- 1: The task involves text and the text is mostly right but has minor mistakes.\n"
+                    "- 2: The text is fully correct, or the task does not involve any text.\n"
+                    "IMPORTANT: If the expected prompt does NOT mention any text, immediately award 2 points for text_accuracy to avoid unfair penalization.\n\n"
+                    "4) composition_aesthetics\n"
+                    "- 0: Composition is awkward, unbalanced, or visually broken.\n"
+                    "- 1: Composition is acceptable but not strong or fully natural.\n"
+                    "- 2: Composition is balanced, natural, and aesthetically good.\n\n"
+                    "5) subject_consistency\n"
+                    "- 0: The main subject identity, structure, or key attributes drift badly.\n"
+                    "- 1: The subject is mostly consistent but has noticeable deviations.\n"
+                    "- 2: The subject remains highly consistent.\n\n"
+                    "In summary, briefly explain which dimensions lost points and why."
                 ),
             },
             {
@@ -90,24 +117,34 @@ class ImageScoreTool(BaseTool[ImageScoreArgs]):
                 ],
             },
         ]
-        result = await ctx.llm.generate_structured(
+        llm_result = await ctx.llm.generate_structured(
             messages=messages,
-            response_model=ImageScoreResult,
+            response_model=_RubricScoreResponse,
             task_name=self.name,
         )
+        result = ImageScoreResult.model_validate(llm_result.model_dump())
         score_artifact = ctx.register_artifact(
             artifact_type=ArtifactType.SCORE,
             value={
                 "overall_score": result.overall_score,
-                "dimension_scores": [dimension.model_dump() for dimension in result.dimension_scores],
+                "prompt_alignment": result.prompt_alignment,
+                "visual_quality": result.visual_quality,
+                "text_accuracy": result.text_accuracy,
+                "composition_aesthetics": result.composition_aesthetics,
+                "subject_consistency": result.subject_consistency,
                 "summary": result.summary,
             },
             metadata={
                 "description": "Structured image evaluation score",
                 "source_artifact_id": image_artifact.artifact_id,
                 "expected_prompt": args.expected_prompt,
+                "scoring_template": "five_dimension_ten_point_rubric_v1",
                 "overall_score": result.overall_score,
-                "dimension_names": [dimension.name for dimension in result.dimension_scores],
+                "prompt_alignment": result.prompt_alignment,
+                "visual_quality": result.visual_quality,
+                "text_accuracy": result.text_accuracy,
+                "composition_aesthetics": result.composition_aesthetics,
+                "subject_consistency": result.subject_consistency,
             },
         )
         output = ctx.bind_output(
@@ -127,7 +164,6 @@ tool_registry.register(image_score_tool, replace=True)
 
 __all__ = [
     "ImageScoreArgs",
-    "ScoreDimension",
     "ImageScoreResult",
     "ImageScoreTool",
     "image_score_tool",

@@ -16,7 +16,7 @@ from .image_grounding import (
     image_grounding_tool,
 )
 from .image_ocr import ImageOCRArgs, ImageOCRTool, OCRBlock, OCRResult, image_ocr_tool
-from .image_score import ImageScoreArgs, ImageScoreResult, ImageScoreTool, ScoreDimension, image_score_tool
+from .image_score import ImageScoreArgs, ImageScoreResult, ImageScoreTool, image_score_tool
 from .image_segment import ImageSegmentArgs, ImageSegmentTool, image_segment_tool
 from .image_understand import (
     ImageAttribute,
@@ -54,7 +54,6 @@ __all__ = [
     "ImageGroundingTool",
     "OCRBlock",
     "OCRResult",
-    "ScoreDimension",
     "ImageSegmentArgs",
     "ImageSegmentTool",
     "ImageUnderstandArgs",
