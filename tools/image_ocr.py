@@ -74,7 +74,9 @@ class ImageOCRTool(BaseTool[ImageOCRArgs]):
                 "content": (
                     "You are an OCR assistant. Extract all readable text from the image. "
                     "Return full_text in natural reading order and return blocks with bounding boxes in "
-                    "[left, top, right, bottom] pixel coordinates. If no readable text exists, return "
+                    "[left, top, right, bottom] absolute integer pixel coordinates based on the original image dimensions. "
+                    "Do not return normalized coordinates, percentages, or floating-point values for bounding boxes. "
+                    "If no readable text exists, return "
                     "full_text as an empty string and blocks as an empty list."
                 ),
             },
@@ -83,7 +85,10 @@ class ImageOCRTool(BaseTool[ImageOCRArgs]):
                 "content": [
                     {
                         "type": "text",
-                        "text": "Extract all readable text from this image and localize each text block.",
+                        "text": (
+                            "Extract all readable text from this image and localize each text block. "
+                            "Use absolute integer pixel coordinates based on the original image dimensions."
+                        ),
                     },
                     {"type": "image_url", "image_url": {"url": to_model_image_url(image_artifact.value)}},
                 ],
