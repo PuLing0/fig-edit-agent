@@ -14,6 +14,11 @@ from PIL import Image
 from pydantic import Field
 
 from ..core import CoordinateManager, LLMClient
+from ..core.grabcut_refinement import (
+    GrabCutRefinementError,
+    RefinementSeedCandidate,
+    refine_candidates as grabcut_refine_candidates,
+)
 from ..core.sam3_point_backend import Sam3BackendError, predict_candidates as sam3_predict_candidates
 from ..schemas import (
     Artifact,
@@ -63,6 +68,10 @@ class ImageSegmentArgs(StrictSchema):
         default="subject_mask",
         description="Semantic output role for the generated mask artifact.",
     )
+    refinement_mode: str = Field(
+        default="grabcut",
+        description="Optional refinement strategy. Use 'grabcut' to run local ROI-aware refinement or 'none' to keep raw candidates only.",
+    )
 
 
 class ImageSegmentTool(BaseTool[ImageSegmentArgs]):
@@ -106,6 +115,7 @@ class ImageSegmentTool(BaseTool[ImageSegmentArgs]):
             image_array=image_array,
             positive_points=positive_points,
             negative_points=negative_points,
+            refinement_mode=args.refinement_mode,
         )
         selected = self._select_best_candidate(
             candidates=candidates,
@@ -132,6 +142,7 @@ class ImageSegmentTool(BaseTool[ImageSegmentArgs]):
                 "component_count": selected.component_count,
                 "positive_points": [point.model_dump() for point in positive_points],
                 "negative_points": [point.model_dump() for point in negative_points],
+                "refinement_mode": args.refinement_mode,
                 "coordinate_info": image_coord.model_dump(),
             },
         )
@@ -170,6 +181,7 @@ class ImageSegmentTool(BaseTool[ImageSegmentArgs]):
         image_array: np.ndarray,
         positive_points: list[Point2D],
         negative_points: list[Point2D],
+        refinement_mode: str,
     ) -> list[SegmentCandidate]:
         backend = ctx.extras.get("segment_backend")
         if backend is not None:
@@ -182,22 +194,70 @@ class ImageSegmentTool(BaseTool[ImageSegmentArgs]):
                 backend_result = await backend_result
             candidates = self._coerce_backend_candidates(backend_result)
             if candidates:
-                return candidates
+                return self._maybe_add_refinement_candidates(
+                    image_array=image_array,
+                    positive_points=positive_points,
+                    negative_points=negative_points,
+                    candidates=candidates,
+                    refinement_mode=refinement_mode,
+                )
             raise ValueError("Injected segment_backend returned no candidate masks")
 
         try:
-            return self._coerce_backend_candidates(
+            candidates = self._coerce_backend_candidates(
                 sam3_predict_candidates(
                     image_array=image_array,
                     positive_points=positive_points,
                     negative_points=negative_points,
                 )
             )
+            return self._maybe_add_refinement_candidates(
+                image_array=image_array,
+                positive_points=positive_points,
+                negative_points=negative_points,
+                candidates=candidates,
+                refinement_mode=refinement_mode,
+            )
         except Sam3BackendError as exc:
             raise RuntimeError(
                 "Real SAM3 backend is required for image_segment but could not be used. "
                 "Check the vendored SAM3 package, checkpoint settings, and Python dependencies."
             ) from exc
+
+    @staticmethod
+    def _maybe_add_refinement_candidates(
+        *,
+        image_array: np.ndarray,
+        positive_points: list[Point2D],
+        negative_points: list[Point2D],
+        candidates: list[SegmentCandidate],
+        refinement_mode: str,
+    ) -> list[SegmentCandidate]:
+        normalized_mode = refinement_mode.strip().lower()
+        if normalized_mode in {"", "none", "off", "false"}:
+            return ImageSegmentTool._deduplicate_candidates(candidates)
+        if normalized_mode != "grabcut":
+            raise ValueError(f"Unsupported refinement_mode: {refinement_mode}")
+
+        seed_candidates = [
+            RefinementSeedCandidate(name=item.name, mask=item.mask, score=item.score) for item in candidates
+        ]
+        try:
+            refined = grabcut_refine_candidates(
+                image_array=image_array,
+                positive_points=positive_points,
+                negative_points=negative_points,
+                seed_candidates=seed_candidates,
+            )
+        except GrabCutRefinementError:
+            refined = []
+
+        return ImageSegmentTool._deduplicate_candidates(
+            [
+                *candidates,
+                *ImageSegmentTool._coerce_backend_candidates(refined),
+            ]
+        )
 
     @staticmethod
     def _coerce_backend_candidates(raw_candidates: Any) -> list[SegmentCandidate]:
@@ -365,13 +425,20 @@ class ImageSegmentTool(BaseTool[ImageSegmentArgs]):
 
         valid.sort(
             key=lambda item: (
-                -item.score,
+                -(item.score + ImageSegmentTool._selection_priority_bias(item.candidate_name)),
                 item.area,
                 item.component_count,
                 item.candidate_index,
             )
         )
         return valid[0]
+
+    @staticmethod
+    def _selection_priority_bias(candidate_name: str) -> float:
+        normalized = candidate_name.strip().lower()
+        if normalized == "grabcut_prompt":
+            return 0.08
+        return 0.0
 
     @staticmethod
     def _retain_seed_components(mask: np.ndarray, positive_points: list[Point2D]) -> tuple[np.ndarray | None, int]:
