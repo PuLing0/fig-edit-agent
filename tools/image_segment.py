@@ -196,7 +196,7 @@ class ImageSegmentTool(BaseTool[ImageSegmentArgs]):
         except Sam3BackendError as exc:
             raise RuntimeError(
                 "Real SAM3 backend is required for image_segment but could not be used. "
-                "Check SAM3 repo path, checkpoint settings, and Python dependencies."
+                "Check the vendored SAM3 package, checkpoint settings, and Python dependencies."
             ) from exc
 
     @staticmethod

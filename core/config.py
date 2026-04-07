@@ -31,10 +31,6 @@ class AgentSettings(BaseSettings):
         description="Default model name used for structured and text generation.",
     )
     llm_api_key: SecretStr = Field(description="API key used to access the LLM provider.")
-    sam3_repo_path: str = Field(
-        default="/Users/sijuzheng/project/sam3_260405/sam3",
-        description="Local filesystem path to the SAM3 repository root.",
-    )
     sam3_checkpoint_path: str | None = Field(
         default=None,
         description="Optional explicit path to a SAM3/SAM3.1 checkpoint file.",

@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image
 
 from ..schemas import Point2D
-from .config import settings
+from .config import PACKAGE_ROOT, settings
 
 
 class Sam3BackendError(RuntimeError):
@@ -29,27 +29,39 @@ def _maybe_configure_cuda_visible_devices() -> None:
     os.environ["CUDA_VISIBLE_DEVICES"] = visible_devices
 
 
-def _ensure_repo_on_syspath(repo_path: str) -> None:
-    root = Path(repo_path).expanduser().resolve()
-    if not root.exists():
+def _ensure_vendored_sam3_on_syspath() -> None:
+    vendored_root = PACKAGE_ROOT / "core" / "_vendor"
+    vendored_package_dir = vendored_root / "sam3"
+    vendored_model_builder = vendored_package_dir / "model_builder.py"
+    if not vendored_model_builder.exists():
         raise Sam3BackendError(
-            f"SAM3 repository path does not exist: {root}. "
-            "Set SAM3_REPO_PATH in fig_edit_agent/.env to your local SAM3 checkout."
+            "Vendored SAM3 package is missing from this project. "
+            "Expected to find core/_vendor/sam3/model_builder.py inside the repository."
         )
-    root_str = str(root)
-    if root_str not in sys.path:
-        sys.path.insert(0, root_str)
+    vendored_root_str = str(vendored_root)
+    if vendored_root_str not in sys.path:
+        sys.path.insert(0, vendored_root_str)
+
+    loaded_module = sys.modules.get("sam3")
+    if loaded_module is None:
+        return
+    loaded_from = Path(getattr(loaded_module, "__file__", "")).resolve()
+    if vendored_package_dir in loaded_from.parents:
+        return
+    for module_name in list(sys.modules):
+        if module_name == "sam3" or module_name.startswith("sam3."):
+            sys.modules.pop(module_name, None)
 
 
 @lru_cache(maxsize=1)
 def _load_predictor():
     _maybe_configure_cuda_visible_devices()
-    _ensure_repo_on_syspath(settings.sam3_repo_path)
+    _ensure_vendored_sam3_on_syspath()
     try:
         model_builder = importlib.import_module("sam3.model_builder")
     except Exception as exc:  # pragma: no cover - import error path
         raise Sam3BackendError(
-            "Failed to import SAM3 from the configured repository. "
+            "Failed to import the vendored SAM3 package from this project. "
             "Make sure the SAM3 repo dependencies are installed in the active environment."
         ) from exc
 

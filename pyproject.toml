@@ -22,6 +22,11 @@ packages = [
   "fig_edit_agent.core",
   "fig_edit_agent.schemas",
   "fig_edit_agent.tools",
+  "sam3",
+  "sam3.model",
+  "sam3.model.utils",
+  "sam3.perflib",
+  "sam3.sam",
 ]
 
 [tool.setuptools.package-dir]
@@ -29,3 +34,7 @@ packages = [
 "fig_edit_agent.core" = "core"
 "fig_edit_agent.schemas" = "schemas"
 "fig_edit_agent.tools" = "tools"
+"sam3" = "core/_vendor/sam3"
+
+[tool.setuptools.package-data]
+"sam3" = ["assets/*.txt.gz"]
