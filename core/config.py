@@ -73,7 +73,7 @@ class AgentSettings(BaseSettings):
     )
     firered_device_map: str | None = Field(
         default=None,
-        description="Optional FireRed device map, e.g. 'balanced' or 'auto'.",
+        description="Optional FireRed device map. Use 'balanced' for pipeline-level component placement or 'manual' for project-local multi-GPU layer sharding.",
     )
     firered_per_gpu_max_memory: str | None = Field(
         default=None,

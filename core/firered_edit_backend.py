@@ -11,6 +11,7 @@ from PIL import Image
 
 from .config import settings
 from .firered_fast_pipeline import load_fast_pipeline
+from .firered_manual_pipeline import load_manual_sharded_pipeline
 
 
 class FireRedBackendError(RuntimeError):
@@ -85,7 +86,7 @@ def load_pipeline():
                 "Failed to load the vendored FireRed fast pipeline. "
                 "Check FIRERED_MODEL_PATH and fast-mode runtime dependencies."
             ) from exc
-        if settings.firered_enable_attention_slicing:
+        if settings.firered_enable_attention_slicing or device_map:
             pipe.enable_attention_slicing()
         pipe.set_progress_bar_config(disable=None)
         return pipe
@@ -98,6 +99,40 @@ def load_pipeline():
     per_gpu_max_memory = settings.firered_per_gpu_max_memory or None
     lora_path = settings.firered_lora_path or None
     lora_weight_name = settings.firered_lora_weight_name or None
+    if device_map == "manual":
+        if not torch.cuda.is_available():
+            raise FireRedBackendError("firered_device_map='manual' requires CUDA to be available.")
+        if torch.cuda.device_count() < 2:
+            raise FireRedBackendError(
+                "firered_device_map='manual' requires at least 2 visible CUDA devices."
+            )
+        try:
+            pipe = load_manual_sharded_pipeline(
+                settings.firered_model_path,
+                local_files_only=settings.firered_local_files_only,
+            )
+        except Exception as exc:  # pragma: no cover - manual shard path
+            raise FireRedBackendError(
+                "Failed to load FireRed with manual multi-GPU sharding. "
+                "Check visible GPUs, FIRERED_MODEL_PATH, and runtime dependencies."
+            ) from exc
+
+        if lora_path:
+            lora_kwargs: dict[str, Any] = {"adapter_name": settings.firered_lora_adapter_name}
+            if lora_weight_name:
+                lora_kwargs["weight_name"] = lora_weight_name
+            if settings.firered_local_files_only:
+                lora_kwargs["local_files_only"] = True
+            pipe.load_lora_weights(lora_path, **lora_kwargs)
+            if settings.firered_fuse_lora:
+                pipe.fuse_lora()
+
+        if settings.firered_enable_attention_slicing:
+            pipe.enable_attention_slicing()
+
+        pipe.set_progress_bar_config(disable=None)
+        return pipe
+
     if device_map is None and per_gpu_max_memory:
         device_map = "balanced"
 
