@@ -5,13 +5,12 @@ from __future__ import annotations
 from functools import lru_cache
 import importlib
 import os
-import sys
-from pathlib import Path
 from typing import Any
 
 from PIL import Image
 
 from .config import settings
+from .firered_fast_pipeline import load_fast_pipeline
 
 
 class FireRedBackendError(RuntimeError):
@@ -26,18 +25,6 @@ def _maybe_configure_cuda_visible_devices() -> None:
     if not visible_devices:
         return
     os.environ["CUDA_VISIBLE_DEVICES"] = visible_devices
-
-
-def _ensure_repo_on_syspath(repo_path: str) -> None:
-    root = Path(repo_path).expanduser().resolve()
-    if not root.exists():
-        raise FireRedBackendError(
-            f"FireRed repository path does not exist: {root}. "
-            "Set FIRERED_REPO_PATH in fig_edit_agent/.env to your local FireRed-Image-Edit checkout."
-        )
-    root_str = str(root)
-    if root_str not in sys.path:
-        sys.path.insert(0, root_str)
 
 
 def _build_max_memory(torch_module: Any, per_gpu_max_memory: str | None, cpu_max_memory: str | None) -> dict[Any, str] | None:
@@ -58,7 +45,6 @@ def load_pipeline():
     """Load and cache the FireRed image edit pipeline."""
 
     _maybe_configure_cuda_visible_devices()
-    _ensure_repo_on_syspath(settings.firered_repo_path)
     try:
         torch = importlib.import_module("torch")
         diffusers = importlib.import_module("diffusers")
@@ -74,27 +60,39 @@ def load_pipeline():
             "Installed diffusers package does not expose QwenImageEditPlusPipeline."
         ) from exc
 
-    if settings.firered_optimized:
+    inference_mode = settings.firered_inference_mode
+    if inference_mode == "fast":
         if any(
             [
                 settings.firered_lora_path and settings.firered_lora_path.strip(),
                 settings.firered_device_map and settings.firered_device_map.strip(),
                 settings.firered_per_gpu_max_memory and settings.firered_per_gpu_max_memory.strip(),
-                settings.firered_local_files_only,
             ]
         ):
             raise FireRedBackendError(
-                "firered_optimized only supports direct single-GPU loading without LoRA or device_map sharding."
+                "firered_inference_mode='fast' only supports direct single-GPU loading without LoRA or device_map sharding."
             )
+        if not torch.cuda.is_available():
+            raise FireRedBackendError("firered_inference_mode='fast' requires CUDA to be available.")
         try:
-            load_fast_pipeline = importlib.import_module("utils.fast_pipeline").load_fast_pipeline
-        except Exception as exc:  # pragma: no cover - optimized path
+            pipe = load_fast_pipeline(
+                settings.firered_model_path,
+                device="cuda:0",
+                local_files_only=settings.firered_local_files_only,
+            )
+        except Exception as exc:  # pragma: no cover - fast path
             raise FireRedBackendError(
-                "Failed to import FireRed's optimized fast pipeline helper."
+                "Failed to load the vendored FireRed fast pipeline. "
+                "Check FIRERED_MODEL_PATH and fast-mode runtime dependencies."
             ) from exc
-        pipe = load_fast_pipeline(settings.firered_model_path)
+        if settings.firered_enable_attention_slicing:
+            pipe.enable_attention_slicing()
         pipe.set_progress_bar_config(disable=None)
         return pipe
+    if inference_mode != "normal":
+        raise FireRedBackendError(
+            f"Unsupported FireRed inference mode: {inference_mode!r}. Use 'normal' or 'fast'."
+        )
 
     device_map = settings.firered_device_map or None
     per_gpu_max_memory = settings.firered_per_gpu_max_memory or None
@@ -203,6 +201,7 @@ def backend_config_snapshot() -> dict[str, Any]:
 
     return {
         "model_path": settings.firered_model_path,
+        "inference_mode": settings.firered_inference_mode,
         "local_files_only": settings.firered_local_files_only,
         "cuda_visible_devices": settings.firered_cuda_visible_devices or None,
         "device_map": settings.firered_device_map or None,
@@ -214,7 +213,6 @@ def backend_config_snapshot() -> dict[str, Any]:
         "lora_weight_name": settings.firered_lora_weight_name or None,
         "lora_adapter_name": settings.firered_lora_adapter_name,
         "fuse_lora": settings.firered_fuse_lora,
-        "optimized": settings.firered_optimized,
         "num_inference_steps": settings.firered_num_inference_steps,
         "true_cfg_scale": settings.firered_true_cfg_scale,
         "guidance_scale": settings.firered_guidance_scale,

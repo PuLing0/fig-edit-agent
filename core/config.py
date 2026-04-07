@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -58,13 +59,13 @@ class AgentSettings(BaseSettings):
         default=False,
         description="Whether to enable torch.compile when constructing the SAM3 image model.",
     )
-    firered_repo_path: str = Field(
-        default="/Users/sijuzheng/research/project/Fig-Edit/FireRed-Image-Edit",
-        description="Local filesystem path to the FireRed-Image-Edit repository root.",
-    )
     firered_model_path: str = Field(
         default="FireRedTeam/FireRed-Image-Edit-1.0",
         description="Path to the FireRed model or Hugging Face model id.",
+    )
+    firered_inference_mode: Literal["normal", "fast"] = Field(
+        default="normal",
+        description="FireRed inference pipeline variant. Use 'normal' for standard diffusers loading or 'fast' for vendored accelerated loading.",
     )
     firered_local_files_only: bool = Field(
         default=False,
@@ -109,10 +110,6 @@ class AgentSettings(BaseSettings):
     firered_fuse_lora: bool = Field(
         default=False,
         description="Whether to fuse FireRed LoRA weights after loading.",
-    )
-    firered_optimized: bool = Field(
-        default=False,
-        description="Whether to use FireRed's optimized fast pipeline path.",
     )
     firered_num_inference_steps: int = Field(
         default=40,

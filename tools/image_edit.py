@@ -108,7 +108,7 @@ class ImageEditTool(BaseTool[ImageEditArgs]):
         except FireRedBackendError as exc:
             raise RuntimeError(
                 "image_edit could not run the FireRed backend. "
-                "Check FireRed repo path, model configuration, and runtime dependencies."
+                "Check FireRed inference mode, model configuration, and runtime dependencies."
             ) from exc
 
         output_path = self._write_output(edited_image, attempt_id=ctx.attempt_id)
