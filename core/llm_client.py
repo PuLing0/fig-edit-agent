@@ -50,6 +50,8 @@ class LLMClient:
 
         log_prefix = f"[{task_name}]"
         current_messages = list(messages)
+        use_parse_api = True
+        json_mode_instructions_added = False
 
         for attempt in range(1, max_retries + 1):
             response = None
@@ -61,23 +63,25 @@ class LLMClient:
                     max_retries,
                     model or self.default_model,
                 )
-
-                response = await self.client.beta.chat.completions.parse(
-                    model=model or self.default_model,
-                    messages=current_messages,
-                    response_format=response_model,
-                    temperature=temperature,
-                )
-
-                message = response.choices[0].message
-
-                refusal = getattr(message, "refusal", None)
-                if refusal:
-                    raise ValueError(f"Model refused to answer: {refusal}")
-
-                parsed_object = message.parsed
-                if parsed_object is None:
-                    raise ValueError("Model returned success but parsed object is None.")
+                if use_parse_api:
+                    response = await self.client.beta.chat.completions.parse(
+                        model=model or self.default_model,
+                        messages=current_messages,
+                        response_format=response_model,
+                        temperature=temperature,
+                    )
+                    parsed_object = self._extract_parsed_object(response)
+                else:
+                    response = await self.client.chat.completions.create(
+                        model=model or self.default_model,
+                        messages=current_messages,
+                        temperature=temperature,
+                    )
+                    raw_content = self._extract_raw_content(response)
+                    parsed_object = self._parse_json_response(
+                        raw_content=raw_content,
+                        response_model=response_model,
+                    )
 
                 logger.info("%s Attempt %s successful. Validation passed.", log_prefix, attempt)
                 return parsed_object
@@ -108,6 +112,20 @@ class LLMClient:
                 )
 
             except Exception as exc:
+                if use_parse_api and self._should_fallback_from_parse(exc=exc, response=response):
+                    logger.warning(
+                        "%s Parse API is incompatible with this endpoint. Falling back to JSON text mode. Error: %s",
+                        log_prefix,
+                        str(exc),
+                    )
+                    use_parse_api = False
+                    if not json_mode_instructions_added:
+                        current_messages = self._augment_messages_for_json_mode(
+                            current_messages,
+                            response_model=response_model,
+                        )
+                        json_mode_instructions_added = True
+                    continue
                 logger.error("%s Unexpected API error: %s", log_prefix, str(exc))
                 raise
 
@@ -165,8 +183,12 @@ class LLMClient:
     def _extract_raw_content(response) -> str:
         """Best-effort extraction of the model's raw failed response."""
 
-        if response is None or not getattr(response, "choices", None):
+        if response is None:
             return "{}"
+        if isinstance(response, str):
+            return response
+        if not getattr(response, "choices", None):
+            return str(response)
 
         message = response.choices[0].message
         content = getattr(message, "content", None)
@@ -188,6 +210,105 @@ class LLMClient:
                         serialized.append(str(item))
             return "\n".join(serialized) if serialized else "{}"
         return str(content)
+
+    @staticmethod
+    def _extract_parsed_object(response) -> T:
+        """Extract a parsed structured object from SDK parse responses."""
+
+        if isinstance(response, str):
+            raise TypeError("parse endpoint returned a plain string instead of an SDK response object")
+        if response is None or not getattr(response, "choices", None):
+            raise TypeError("parse endpoint returned an object without choices")
+
+        message = response.choices[0].message
+        refusal = getattr(message, "refusal", None)
+        if refusal:
+            raise ValueError(f"Model refused to answer: {refusal}")
+
+        parsed_object = getattr(message, "parsed", None)
+        if parsed_object is None:
+            raise ValueError("Model returned success but parsed object is None.")
+        return parsed_object
+
+    @staticmethod
+    def _parse_json_response(*, raw_content: str, response_model: Type[T]) -> T:
+        """Parse a plain-text JSON response into the target schema."""
+
+        json_payload = LLMClient._extract_json_payload(raw_content)
+        data = json.loads(json_payload)
+        return response_model.model_validate(data)
+
+    @staticmethod
+    def _extract_json_payload(raw_content: str) -> str:
+        """Extract the JSON object payload from a text response."""
+
+        content = raw_content.strip()
+        if not content:
+            raise ValueError("Model returned empty text content.")
+
+        if content.startswith("```"):
+            lines = content.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            content = "\n".join(lines).strip()
+
+        try:
+            json.loads(content)
+            return content
+        except json.JSONDecodeError:
+            start = content.find("{")
+            end = content.rfind("}")
+            if start == -1 or end == -1 or end < start:
+                raise
+            candidate = content[start : end + 1]
+            json.loads(candidate)
+            return candidate
+
+    @staticmethod
+    def _augment_messages_for_json_mode(
+        messages: list[dict[str, Any]],
+        *,
+        response_model: Type[T],
+    ) -> list[dict[str, Any]]:
+        """Append explicit JSON-only instructions for endpoints without parse support."""
+
+        schema_json = json.dumps(response_model.model_json_schema(), ensure_ascii=False, indent=2)
+        return [
+            *messages,
+            {
+                "role": "user",
+                "content": (
+                    "Return only one valid JSON object and nothing else. "
+                    "Do not use markdown fences or commentary. "
+                    "The JSON must satisfy this schema exactly:\n"
+                    f"{schema_json}"
+                ),
+            },
+        ]
+
+    @staticmethod
+    def _should_fallback_from_parse(*, exc: Exception, response: Any) -> bool:
+        """Whether a parse failure looks like endpoint incompatibility rather than model output failure."""
+
+        if isinstance(response, str):
+            return True
+        if response is not None and not getattr(response, "choices", None):
+            return True
+
+        lowered = str(exc).lower()
+        incompatible_markers = (
+            "invalid_json_schema",
+            "response_format",
+            "additionalproperties",
+            "object has no attribute 'choices'",
+            "plain string",
+            "without choices",
+        )
+        if any(marker in lowered for marker in incompatible_markers):
+            return True
+        return isinstance(exc, (AttributeError, TypeError))
 
 
 __all__ = ["LLMClient"]

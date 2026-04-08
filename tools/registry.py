@@ -2,9 +2,25 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any
 
 from .base import BaseTool, ToolContext, ToolResult
+
+
+_BUILTIN_TOOL_MODULES = (
+    ".image_collage",
+    ".image_crop",
+    ".image_edit",
+    ".image_grounding",
+    ".image_ocr",
+    ".image_score",
+    ".image_segment",
+    ".image_understand",
+    ".prompt_reconstruct",
+)
+
+_builtin_tools_loaded = False
 
 
 class ToolRegistry:
@@ -50,4 +66,15 @@ class ToolRegistry:
 tool_registry = ToolRegistry()
 
 
-__all__ = ["ToolRegistry", "tool_registry"]
+def ensure_builtin_tools_registered() -> None:
+    """Import all built-in tool modules exactly once so they self-register."""
+
+    global _builtin_tools_loaded
+    if _builtin_tools_loaded:
+        return
+    for module_name in _BUILTIN_TOOL_MODULES:
+        import_module(module_name, package=__package__)
+    _builtin_tools_loaded = True
+
+
+__all__ = ["ToolRegistry", "ensure_builtin_tools_registered", "tool_registry"]

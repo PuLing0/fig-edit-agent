@@ -5,9 +5,23 @@ from .firered_edit_backend import FireRedBackendError, backend_config_snapshot, 
 from .geometry_utils import CoordinateManager
 from .llm_client import LLMClient
 
+
+def __getattr__(name: str):
+    if name in {"ExecuteAgent", "ExecuteAgentConfig"}:
+        from .execute_agent import ExecuteAgent, ExecuteAgentConfig
+
+        exports = {
+            "ExecuteAgent": ExecuteAgent,
+            "ExecuteAgentConfig": ExecuteAgentConfig,
+        }
+        return exports[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 __all__ = [
     "AgentSettings",
     "CoordinateManager",
+    "ExecuteAgent",
+    "ExecuteAgentConfig",
     "FireRedBackendError",
     "LLMClient",
     "backend_config_snapshot",

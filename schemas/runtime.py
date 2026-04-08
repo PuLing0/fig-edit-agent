@@ -8,8 +8,8 @@ from typing import Any
 from pydantic import Field, PositiveInt, model_validator
 
 from .base import Identifier, NonEmptyStr, StrictSchema, utc_now
-from .enums import AttemptStatus, EvaluationDecision, EvaluationStatus, FailureType, ReplanScope
-from .plan import SuccessCriteria
+from .enums import AttemptStatus, EvaluationDecision, EvaluationStatus, FailureType, NodeKind, ReplanScope
+from .plan import SlotSpec, SuccessCriteria
 
 
 class ArtifactBinding(StrictSchema):
@@ -93,9 +93,14 @@ class ExecutionRequest(StrictSchema):
     plan_id: Identifier = Field(description="Plan that owns the node being executed.")
     plan_version: PositiveInt = Field(description="Numeric version of the active plan.")
     node_id: Identifier = Field(description="Node being executed.")
+    node_kind: NodeKind = Field(description="Canonical task kind used as an execution prior.")
     attempt_id: Identifier = Field(description="Unique identifier of the concrete attempt.")
     objective: NonEmptyStr = Field(description="Task objective the executor should accomplish.")
     inputs: list[ArtifactBinding] = Field(default_factory=list, description="Concrete input bindings for this attempt.")
+    output_slots: list[SlotSpec] = Field(
+        default_factory=list,
+        description="Declared final output slots this node may bind during execution.",
+    )
     success: SuccessCriteria = Field(description="Acceptance criteria the executor should optimize toward.")
     allowed_tools: list[NonEmptyStr] = Field(
         default_factory=list,
@@ -114,6 +119,15 @@ class ExecutionRequest(StrictSchema):
     def validate_request(self) -> "ExecutionRequest":
         if len(self.allowed_tools) != len(set(self.allowed_tools)):
             raise ValueError("allowed_tools must be unique")
+        output_names = [slot.name for slot in self.output_slots]
+        if len(output_names) != len(set(output_names)):
+            raise ValueError("output slot names must be unique within an execution request")
+        missing_required_outputs = sorted(set(self.success.required_outputs).difference(output_names))
+        if missing_required_outputs:
+            raise ValueError(
+                "success.required_outputs contains undefined execution output slots: "
+                + ", ".join(missing_required_outputs)
+            )
         if self.retry_advice is not None and self.retry_from_attempt_id is None:
             raise ValueError("retry_from_attempt_id is required when retry_advice is provided")
         return self
