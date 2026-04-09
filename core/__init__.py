@@ -15,6 +15,14 @@ def __getattr__(name: str):
             "ExecuteAgentConfig": ExecuteAgentConfig,
         }
         return exports[name]
+    if name in {"PlanAgent", "PlanAgentConfig"}:
+        from .plan_agent import PlanAgent, PlanAgentConfig
+
+        exports = {
+            "PlanAgent": PlanAgent,
+            "PlanAgentConfig": PlanAgentConfig,
+        }
+        return exports[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -24,6 +32,8 @@ __all__ = [
     "ExecuteAgentConfig",
     "FireRedBackendError",
     "LLMClient",
+    "PlanAgent",
+    "PlanAgentConfig",
     "backend_config_snapshot",
     "edit_images",
     "load_pipeline",

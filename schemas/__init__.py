@@ -8,6 +8,7 @@ from .enums import (
     EvaluationDecision,
     EvaluationStatus,
     FailureType,
+    InputArtifactRole,
     NodeKind,
     NodeStatus,
     ReplanScope,
@@ -15,6 +16,7 @@ from .enums import (
 )
 from .geometry import BoundingBox, CoordinateInfo, PlacementRecord, Point2D, Polygon2D
 from .plan import DAGPlan, ScoreThreshold, SlotSpec, SuccessCriteria, TaskNode
+from .planner import ArtifactManifest, ArtifactSummary, PlanAgentRequest
 from .runtime import (
     ActionStep,
     ArtifactBinding,
@@ -31,7 +33,9 @@ from .state import NodeState, WorkflowState
 __all__ = [
     "ActionStep",
     "Artifact",
+    "ArtifactManifest",
     "ArtifactBinding",
+    "ArtifactSummary",
     "ArtifactType",
     "AttemptStatus",
     "BoundingBox",
@@ -45,11 +49,13 @@ __all__ = [
     "FailureType",
     "HardRuleResult",
     "Identifier",
+    "InputArtifactRole",
     "NamedScore",
     "NodeKind",
     "NodeState",
     "NodeStatus",
     "NonEmptyStr",
+    "PlanAgentRequest",
     "PlacementRecord",
     "Point2D",
     "Polygon2D",

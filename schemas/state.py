@@ -9,6 +9,7 @@ from pydantic import Field
 from .artifact import Artifact
 from .base import Identifier, StrictSchema, utc_now
 from .enums import NodeStatus, WorkflowStatus
+from .planner import ArtifactManifest, ArtifactSummary
 
 
 class NodeState(StrictSchema):
@@ -39,6 +40,14 @@ class WorkflowState(StrictSchema):
     active_plan_version: int = Field(ge=1, description="Currently active plan version.")
     nodes: dict[Identifier, NodeState] = Field(default_factory=dict, description="Runtime node states keyed by node id.")
     artifacts: dict[Identifier, Artifact] = Field(default_factory=dict, description="Artifact registry keyed by artifact id.")
+    artifact_summaries: dict[Identifier, ArtifactSummary] = Field(
+        default_factory=dict,
+        description="Planner-facing semantic summaries keyed by summary artifact id.",
+    )
+    artifact_manifests: dict[Identifier, ArtifactManifest] = Field(
+        default_factory=dict,
+        description="Planner-facing manifest entries keyed by artifact id.",
+    )
     replan_count: int = Field(default=0, ge=0, description="How many replans have been performed so far.")
     created_at: datetime = Field(default_factory=utc_now, description="UTC timestamp when the workflow state was created.")
     updated_at: datetime = Field(default_factory=utc_now, description="UTC timestamp of the latest workflow update.")

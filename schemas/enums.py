@@ -32,6 +32,10 @@ class NodeKind(str, Enum):
     CROP = "crop"
     COMPOSE = "compose"
     UNDERSTAND = "understand"
+    EXTRACT_SUBJECT = "extract_subject"
+    SELECT_BACKGROUND = "select_background"
+    COMPOSE_SCENE = "compose_scene"
+    POLISH_IMAGE = "polish_image"
     REWRITE_PROMPT = "rewrite_prompt"
     OCR = "ocr"
     SCORE = "score"
@@ -81,12 +85,20 @@ class ArtifactType(str, Enum):
     ANALYSIS = "analysis"
 
 
+class InputArtifactRole(str, Enum):
+    PRIMARY_INPUT = "primary_input"
+    SUBJECT_SOURCE = "subject_source"
+    BACKGROUND_CANDIDATE = "background_candidate"
+    REFERENCE_ONLY = "reference_only"
+
+
 __all__ = [
     "ArtifactType",
     "AttemptStatus",
     "EvaluationDecision",
     "EvaluationStatus",
     "FailureType",
+    "InputArtifactRole",
     "NodeKind",
     "NodeStatus",
     "ReplanScope",
