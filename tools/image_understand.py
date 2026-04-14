@@ -66,13 +66,24 @@ class ImageUnderstandTool(BaseTool[ImageUnderstandArgs]):
                 "role": "system",
                 "content": (
                     "You are an image understanding assistant. Analyze the provided image and "
-                    "return a precise, compact semantic summary."
+                    "return a precise, compact semantic summary.\n\n"
+                    "Focus on:\n"
+                    "- description: one concise but informative summary of the visible content.\n"
+                    "- labels: short semantic tags for the main entities or concepts.\n"
+                    "- attributes: useful visual properties such as lighting, style, composition, camera angle, or mood."
                 ),
             },
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {
+                        "type": "text",
+                        "text": (
+                            f"{prompt}\n\n"
+                            "Keep the summary compact and visually grounded. "
+                            "Prefer a small number of high-signal labels and attributes over exhaustive listing."
+                        ),
+                    },
                     {"type": "image_url", "image_url": {"url": to_model_image_url(image_artifact.value)}},
                 ],
             },

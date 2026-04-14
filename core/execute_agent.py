@@ -443,7 +443,9 @@ class ExecuteAgent:
             "8. tool_args_json must be a valid JSON object string. Example: "
             '{"image_artifact_id":"artifact_1","prompt":"describe the image"}.\n'
             "9. When a previous observation shows an error, correct the next action instead of repeating it unchanged.\n"
-            "10. Never invent artifacts, tool names, or arguments that are not supported."
+            "10. Never invent artifacts, tool names, or arguments that are not supported.\n"
+            "11. For tool actions, choose a concrete next tool call with arguments that can run immediately.\n"
+            "12. For finish actions, stop only when the required outputs are already available."
         )
         return [
             {"role": "system", "content": system_prompt},
