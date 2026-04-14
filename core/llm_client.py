@@ -1,13 +1,15 @@
-"""Robust async LLM client with structured output and self-correction."""
+"""Robust async LLM client with pydantic-ai structured output."""
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Type, TypeVar
+from typing import Any, Type, TypeVar, cast
 
 from openai import AsyncOpenAI
-from pydantic import ValidationError
+from pydantic_ai import Agent, ImageUrl
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
 
 from .config import settings
 from ..schemas.base import StrictSchema
@@ -20,18 +22,16 @@ logger = logging.getLogger(__name__)
 
 
 class LLMClient:
-    """Thin async wrapper around OpenAI's structured output interface.
-
-    This client is intentionally small: it handles configuration, request sending,
-    refusal/empty-response checks, and a Pydantic-driven self-correction loop.
-    """
+    """Thin async wrapper around OpenAI-compatible text and structured generation."""
 
     def __init__(self) -> None:
         self.client = AsyncOpenAI(
             base_url=settings.llm_base_url,
             api_key=settings.llm_api_key.get_secret_value(),
         )
+        self.provider = OpenAIProvider(openai_client=self.client)
         self.default_model = settings.llm_model_name
+        self._structured_models: dict[str, OpenAIChatModel] = {}
 
     async def generate_structured(
         self,
@@ -42,94 +42,37 @@ class LLMClient:
         model: str | None = None,
         temperature: float = 0.0,
     ) -> T:
-        """Generate a structured object that must validate against `response_model`.
-
-        If the model returns invalid content, the validation error is appended back
-        into the conversation to give the model a chance to self-correct.
-        """
+        """Generate a structured object that must validate against `response_model`."""
 
         log_prefix = f"[{task_name}]"
-        current_messages = list(messages)
-        use_parse_api = True
-        json_mode_instructions_added = False
+        model_name = model or self.default_model
+        logger.info(
+            "%s Requesting %s via pydantic-ai with output schema %s",
+            log_prefix,
+            model_name,
+            response_model.__name__,
+        )
 
-        for attempt in range(1, max_retries + 1):
-            response = None
-            try:
-                logger.info(
-                    "%s Attempt %s/%s - Requesting %s",
-                    log_prefix,
-                    attempt,
-                    max_retries,
-                    model or self.default_model,
-                )
-                if use_parse_api:
-                    response = await self.client.beta.chat.completions.parse(
-                        model=model or self.default_model,
-                        messages=current_messages,
-                        response_format=response_model,
-                        temperature=temperature,
-                    )
-                    parsed_object = self._extract_parsed_object(response)
-                else:
-                    response = await self.client.chat.completions.create(
-                        model=model or self.default_model,
-                        messages=current_messages,
-                        temperature=temperature,
-                    )
-                    raw_content = self._extract_raw_content(response)
-                    parsed_object = self._parse_json_response(
-                        raw_content=raw_content,
-                        response_model=response_model,
-                    )
+        system_prompts = self._extract_system_prompts(messages)
+        user_prompt = self._build_user_prompt(messages)
+        agent: Agent[None, T] = Agent(
+            self._get_structured_model(model_name),
+            output_type=response_model,
+            retries=max_retries,
+            instructions=(
+                "Return a complete object matching the declared output schema exactly. "
+                "Do not omit required fields, nested arrays, or constrained values."
+            ),
+            system_prompt=tuple(system_prompts),
+            defer_model_check=True,
+        )
 
-                logger.info("%s Attempt %s successful. Validation passed.", log_prefix, attempt)
-                return parsed_object
-
-            except (ValidationError, ValueError) as exc:
-                logger.warning(
-                    "%s Validation/Logic Error on attempt %s/%s: %s",
-                    log_prefix,
-                    attempt,
-                    max_retries,
-                    str(exc),
-                )
-                if attempt == max_retries:
-                    logger.error("%s Max retries reached. Failing task.", log_prefix)
-                    raise
-
-                raw_failed_content = self._extract_raw_content(response)
-                current_messages.append({"role": "assistant", "content": raw_failed_content})
-                current_messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "Your previous response failed structural or logical validation.\n"
-                            f"Error Details:\n{str(exc)}\n"
-                            "Please fix the specific issues and output the complete valid JSON again."
-                        ),
-                    }
-                )
-
-            except Exception as exc:
-                if use_parse_api and self._should_fallback_from_parse(exc=exc, response=response):
-                    logger.warning(
-                        "%s Parse API is incompatible with this endpoint. Falling back to JSON text mode. Error: %s",
-                        log_prefix,
-                        str(exc),
-                    )
-                    use_parse_api = False
-                    if not json_mode_instructions_added:
-                        current_messages = self._augment_messages_for_json_mode(
-                            current_messages,
-                            response_model=response_model,
-                        )
-                        json_mode_instructions_added = True
-                    continue
-                logger.error("%s Unexpected API error: %s", log_prefix, str(exc))
-                raise
-
-        raise RuntimeError("Unreachable state in generate_structured")
+        result = await agent.run(
+            user_prompt,
+            model_settings={"temperature": temperature},
+        )
+        logger.info("%s Structured generation successful.", log_prefix)
+        return cast(T, result.output)
 
     async def generate_text(
         self,
@@ -179,136 +122,121 @@ class LLMClient:
         assert last_error is not None
         raise last_error
 
+    def _get_structured_model(self, model_name: str) -> OpenAIChatModel:
+        """Reuse pydantic-ai OpenAI chat model instances per model name."""
+
+        structured_model = self._structured_models.get(model_name)
+        if structured_model is None:
+            structured_model = OpenAIChatModel(model_name, provider=self.provider)
+            self._structured_models[model_name] = structured_model
+        return structured_model
+
     @staticmethod
-    def _extract_raw_content(response) -> str:
-        """Best-effort extraction of the model's raw failed response."""
+    def _extract_system_prompts(messages: list[dict[str, Any]]) -> list[str]:
+        """Collect system-role messages as pydantic-ai system prompts."""
 
-        if response is None:
-            return "{}"
-        if isinstance(response, str):
-            return response
-        if not getattr(response, "choices", None):
-            return str(response)
+        prompts: list[str] = []
+        for message in messages:
+            if message.get("role") != "system":
+                continue
+            content = LLMClient._stringify_content(message.get("content"))
+            if content:
+                prompts.append(content)
+        return prompts
 
-        message = response.choices[0].message
-        content = getattr(message, "content", None)
+    @staticmethod
+    def _build_user_prompt(messages: list[dict[str, Any]]) -> str | list[str | ImageUrl]:
+        """Convert OpenAI-style message payloads into pydantic-ai user prompt parts."""
+
+        prompt_parts: list[str | ImageUrl] = []
+        for message in messages:
+            role = str(message.get("role", "user"))
+            if role == "system":
+                continue
+            prompt_parts.extend(LLMClient._convert_content_parts(message.get("content"), role=role))
+
+        if not prompt_parts:
+            return ""
+        if len(prompt_parts) == 1 and isinstance(prompt_parts[0], str):
+            return prompt_parts[0]
+        return prompt_parts
+
+    @staticmethod
+    def _convert_content_parts(content: Any, *, role: str) -> list[str | ImageUrl]:
+        """Convert one message content payload into pydantic-ai user content parts."""
+
+        role_prefix = "" if role == "user" else f"{role.title()} message:\n"
+        if isinstance(content, str):
+            if not content and not role_prefix:
+                return []
+            return [f"{role_prefix}{content}" if content else role_prefix.rstrip()]
+
+        if isinstance(content, list):
+            parts: list[str | ImageUrl] = []
+            text_prefix = role_prefix
+            for item in content:
+                if not isinstance(item, dict):
+                    parts.append(f"{text_prefix}{json.dumps(item, ensure_ascii=False, default=str)}")
+                    text_prefix = ""
+                    continue
+
+                item_type = item.get("type")
+                if item_type == "text":
+                    text = str(item.get("text", ""))
+                    if text:
+                        parts.append(f"{text_prefix}{text}")
+                        text_prefix = ""
+                    continue
+
+                if item_type == "image_url":
+                    image_url = item.get("image_url")
+                    if not isinstance(image_url, dict) or not image_url.get("url"):
+                        raise ValueError("image_url content must include a non-empty url")
+                    if text_prefix:
+                        parts.append(text_prefix.rstrip())
+                        text_prefix = ""
+                    vendor_metadata = {}
+                    if image_url.get("detail") is not None:
+                        vendor_metadata["detail"] = image_url["detail"]
+                    parts.append(ImageUrl(url=str(image_url["url"]), vendor_metadata=vendor_metadata or None))
+                    continue
+
+                parts.append(f"{text_prefix}{json.dumps(item, ensure_ascii=False, default=str)}")
+                text_prefix = ""
+
+            if not parts and text_prefix:
+                return [text_prefix.rstrip()]
+            return parts
+
+        serialized = LLMClient._stringify_content(content)
+        if not serialized:
+            return []
+        return [f"{role_prefix}{serialized}"]
+
+    @staticmethod
+    def _stringify_content(content: Any) -> str:
+        """Serialize arbitrary message content into a readable text block."""
+
         if content is None:
-            return "{}"
+            return ""
         if isinstance(content, str):
             return content
         if isinstance(content, list):
             serialized: list[str] = []
             for item in content:
-                if hasattr(item, "text") and item.text:
-                    serialized.append(item.text)
-                elif isinstance(item, dict) and "text" in item:
-                    serialized.append(str(item["text"]))
-                else:
-                    try:
-                        serialized.append(json.dumps(item, ensure_ascii=False, default=str))
-                    except TypeError:
-                        serialized.append(str(item))
-            return "\n".join(serialized) if serialized else "{}"
-        return str(content)
-
-    @staticmethod
-    def _extract_parsed_object(response) -> T:
-        """Extract a parsed structured object from SDK parse responses."""
-
-        if isinstance(response, str):
-            raise TypeError("parse endpoint returned a plain string instead of an SDK response object")
-        if response is None or not getattr(response, "choices", None):
-            raise TypeError("parse endpoint returned an object without choices")
-
-        message = response.choices[0].message
-        refusal = getattr(message, "refusal", None)
-        if refusal:
-            raise ValueError(f"Model refused to answer: {refusal}")
-
-        parsed_object = getattr(message, "parsed", None)
-        if parsed_object is None:
-            raise ValueError("Model returned success but parsed object is None.")
-        return parsed_object
-
-    @staticmethod
-    def _parse_json_response(*, raw_content: str, response_model: Type[T]) -> T:
-        """Parse a plain-text JSON response into the target schema."""
-
-        json_payload = LLMClient._extract_json_payload(raw_content)
-        data = json.loads(json_payload)
-        return response_model.model_validate(data)
-
-    @staticmethod
-    def _extract_json_payload(raw_content: str) -> str:
-        """Extract the JSON object payload from a text response."""
-
-        content = raw_content.strip()
-        if not content:
-            raise ValueError("Model returned empty text content.")
-
-        if content.startswith("```"):
-            lines = content.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            content = "\n".join(lines).strip()
-
-        try:
-            json.loads(content)
-            return content
-        except json.JSONDecodeError:
-            start = content.find("{")
-            end = content.rfind("}")
-            if start == -1 or end == -1 or end < start:
-                raise
-            candidate = content[start : end + 1]
-            json.loads(candidate)
-            return candidate
-
-    @staticmethod
-    def _augment_messages_for_json_mode(
-        messages: list[dict[str, Any]],
-        *,
-        response_model: Type[T],
-    ) -> list[dict[str, Any]]:
-        """Append explicit JSON-only instructions for endpoints without parse support."""
-
-        schema_json = json.dumps(response_model.model_json_schema(), ensure_ascii=False, indent=2)
-        return [
-            *messages,
-            {
-                "role": "user",
-                "content": (
-                    "Return only one valid JSON object and nothing else. "
-                    "Do not use markdown fences or commentary. "
-                    "The JSON must satisfy this schema exactly:\n"
-                    f"{schema_json}"
-                ),
-            },
-        ]
-
-    @staticmethod
-    def _should_fallback_from_parse(*, exc: Exception, response: Any) -> bool:
-        """Whether a parse failure looks like endpoint incompatibility rather than model output failure."""
-
-        if isinstance(response, str):
-            return True
-        if response is not None and not getattr(response, "choices", None):
-            return True
-
-        lowered = str(exc).lower()
-        incompatible_markers = (
-            "invalid_json_schema",
-            "response_format",
-            "additionalproperties",
-            "object has no attribute 'choices'",
-            "plain string",
-            "without choices",
-        )
-        if any(marker in lowered for marker in incompatible_markers):
-            return True
-        return isinstance(exc, (AttributeError, TypeError))
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text = str(item.get("text", ""))
+                    if text:
+                        serialized.append(text)
+                    continue
+                if isinstance(item, dict) and item.get("type") == "image_url":
+                    image_url = item.get("image_url")
+                    if isinstance(image_url, dict) and image_url.get("url"):
+                        serialized.append(f"[image: {image_url['url']}]")
+                    continue
+                serialized.append(json.dumps(item, ensure_ascii=False, default=str))
+            return "\n".join(part for part in serialized if part)
+        return json.dumps(content, ensure_ascii=False, default=str)
 
 
 __all__ = ["LLMClient"]

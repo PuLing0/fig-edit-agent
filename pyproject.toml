@@ -10,11 +10,22 @@ requires-python = ">=3.10"
 dependencies = [
   "pydantic>=2.8,<3",
   "pydantic-settings>=2.4,<3",
+  "pydantic-ai",
   "python-dotenv>=1.0,<2",
   "openai>=1.0",
   "pillow>=10,<12",
   "numpy>=1.26,<3",
   "opencv-python-headless>=4.8,<5",
+]
+
+[project.optional-dependencies]
+structured-output-bench = [
+  "instructor",
+  "langchain",
+  "langchain-openai",
+  "langgraph",
+  "marvin",
+  "typechat",
 ]
 
 [tool.setuptools]
