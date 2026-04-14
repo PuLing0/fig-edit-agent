@@ -92,7 +92,31 @@ class InputArtifactRole(str, Enum):
     REFERENCE_ONLY = "reference_only"
 
 
+class ArtifactRole(str, Enum):
+    PRIMARY_INPUT = "primary_input"
+    SUBJECT_SOURCE = "subject_source"
+    BACKGROUND_CANDIDATE = "background_candidate"
+    REFERENCE_ONLY = "reference_only"
+    ANALYSIS = "analysis"
+    IMAGE_SUMMARY = "image_summary"
+    SCENE_UNDERSTANDING = "scene_understanding"
+    SCORE = "score"
+    SCORE_ARTIFACT = "score_artifact"
+    EXTRACTED_SUBJECT = "extracted_subject"
+    BACKGROUND_IMAGE = "background_image"
+    COMPOSED_IMAGE = "composed_image"
+    EDITED_IMAGE = "edited_image"
+    FINAL_IMAGE = "final_image"
+    GROUNDING_POINTS = "grounding_points"
+    SUBJECT_MASK = "subject_mask"
+    OCR_TEXT = "ocr_text"
+    CROPPED_IMAGE = "cropped_image"
+    CAPTION = "caption"
+    TEXT = "text"
+
+
 __all__ = [
+    "ArtifactRole",
     "ArtifactType",
     "AttemptStatus",
     "EvaluationDecision",

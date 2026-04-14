@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..schemas import (
+    ArtifactRole,
     ArtifactManifest,
     ArtifactSummary,
     DAGPlan,
@@ -19,10 +20,32 @@ from ..schemas import (
 from .llm_client import LLMClient
 
 
-EXTRACT_OUTPUT_ROLE = "extracted_subject"
-BACKGROUND_OUTPUT_ROLE = "background_image"
-COMPOSE_OUTPUT_ROLE = "composed_image"
-FINAL_OUTPUT_ROLE = "final_image"
+EXTRACT_OUTPUT_ROLE = ArtifactRole.EXTRACTED_SUBJECT
+BACKGROUND_OUTPUT_ROLE = ArtifactRole.BACKGROUND_IMAGE
+COMPOSE_OUTPUT_ROLE = ArtifactRole.COMPOSED_IMAGE
+FINAL_OUTPUT_ROLE = ArtifactRole.FINAL_IMAGE
+EDIT_OUTPUT_ROLE = ArtifactRole.EDITED_IMAGE
+
+IMAGE_SOURCE_ROLES = {
+    ArtifactRole.PRIMARY_INPUT,
+    ArtifactRole.SUBJECT_SOURCE,
+    ArtifactRole.BACKGROUND_CANDIDATE,
+    ArtifactRole.BACKGROUND_IMAGE,
+    ArtifactRole.COMPOSED_IMAGE,
+    ArtifactRole.EDITED_IMAGE,
+    ArtifactRole.FINAL_IMAGE,
+    ArtifactRole.CROPPED_IMAGE,
+}
+
+UNDERSTAND_OUTPUT_ROLES = {
+    ArtifactRole.ANALYSIS,
+    ArtifactRole.SCENE_UNDERSTANDING,
+}
+
+SCORE_OUTPUT_ROLES = {
+    ArtifactRole.SCORE,
+    ArtifactRole.SCORE_ARTIFACT,
+}
 
 DEFAULT_NODE_RETRY_POLICY: dict[NodeKind, tuple[int, int]] = {
     NodeKind.SELECT_BACKGROUND: (1, 1),
@@ -98,9 +121,17 @@ class PlanAgent:
             "Your job is to decompose the user's goal into semantic task nodes, not tool calls.\n"
             "Do not choose or reference concrete tools. Leave allowed_tools as an empty list for every node.\n"
             "Each node must describe a business subtask with clear goal, inputs, outputs, dependencies, and success criteria.\n"
+            "Before planning, the system has already run image understanding on every user-provided input image. "
+            "Treat the provided artifact_summaries as the initial per-image understanding context for planning.\n"
             "Every targeted input artifact id must be mentioned explicitly in the node goal when that node acts on a specific input image.\n"
             "When the task is multi-image composition, prefer task-level nodes such as extract_subject, "
             "select_background, compose_scene, and polish_image.\n"
+            "Plan image work in stages so execute agents can carry it out step by step. "
+            "Prefer multiple clear edit or composition phases over one oversized node when the request is complex.\n"
+            "Understand nodes are optional control points for re-reading an intermediate image after a significant change. "
+            "Score nodes are optional control points for judging stage quality, prompt alignment, or readiness to continue. "
+            "Insert these nodes when they materially improve robustness, not by default after every edit.\n"
+            "The plan must end with a node that produces the final output image for the user.\n"
             "Use the smallest DAG that fully captures the required subtasks.\n"
             "The output must be a valid DAGPlan with no cycles."
         )
@@ -113,14 +144,28 @@ class PlanAgent:
                 "Input artifacts:\n" + "\n".join(artifact_lines),
                 "Artifact summaries:\n" + "\n".join(summary_lines),
                 "Planner hints:\n" + hints_text,
+                "Planning workflow:\n"
+                "- First use the artifact summaries as the initial understanding of each user-provided input image.\n"
+                "- Then build a staged execution plan that transforms the available images toward the user's goal.\n"
+                "- Add understand nodes when the workflow needs to re-read an edited intermediate image and refresh semantic understanding.\n"
+                "- Add score nodes when the workflow needs to evaluate whether an intermediate or final image is good enough before continuing.\n"
+                "- The final stage must produce an output image that represents the finished result for the user.\n",
                 "Role conventions:\n"
                 "- extract_subject nodes output role=extracted_subject.\n"
                 "- select_background nodes output role=background_image.\n"
                 "- compose_scene nodes consume background_image + extracted_subject and output composed_image.\n"
                 "- polish_image nodes consume composed_image or edited_image and output final_image.\n"
+                "- score nodes must output role=score or role=score_artifact.\n"
                 "- Use semantic slot names such as source_image, subjects, background, composed_image, final_image.\n"
+                "- Choose slot roles from the schema-controlled role vocabulary. For image inputs prefer primary_input, "
+                "subject_source, background_candidate, background_image, composed_image, edited_image, or final_image.\n"
+                "- Mention artifact ids in node goal text when needed, but do not place artifact ids inside slot objects.\n"
                 "- Use allowed_tools: [] for all nodes.\n"
                 "- Include success.required_outputs for every node.\n"
+                "- For non-trivial editing requests, prefer a sequence of stage-specific edit or compose nodes rather than one large catch-all edit node.\n"
+                "- Edit node goals should state the specific stage objective and the image they operate on.\n"
+                "- Understand node goals should state which intermediate image is being re-read and what changes matter.\n"
+                "- Score node goals should state whether they evaluate a stage objective or the overall goal.\n"
                 "- If the user explicitly selected a background artifact, preserve that artifact id in the relevant goal text.\n"
                 "- If multiple subject_source artifacts are provided, create one extraction task per artifact unless the request clearly says otherwise.",
             ]
@@ -181,11 +226,50 @@ class PlanAgent:
                     f"Planner node '{node.node_id}' must not assign concrete tools; allowed_tools must be empty"
                 )
 
+        self._validate_common_image_nodes(plan)
+
         if self._is_multi_image_composition(request):
             self._validate_subject_extraction(plan, request)
             self._validate_background_selection(plan, request)
             self._validate_compose_nodes(plan, node_by_id=node_by_id)
             self._validate_polish_nodes(plan)
+
+    @staticmethod
+    def _validate_common_image_nodes(plan: DAGPlan) -> None:
+        for node in plan.nodes:
+            if node.kind == NodeKind.EDIT:
+                if not any(slot.role in IMAGE_SOURCE_ROLES for slot in node.inputs):
+                    raise ValueError(
+                        f"edit node '{node.node_id}' must consume an image role such as primary_input, "
+                        "edited_image, or composed_image"
+                    )
+                if not any(slot.role in {EDIT_OUTPUT_ROLE, FINAL_OUTPUT_ROLE} for slot in node.outputs):
+                    raise ValueError(
+                        f"edit node '{node.node_id}' must output role "
+                        f"'{EDIT_OUTPUT_ROLE.value}' or '{FINAL_OUTPUT_ROLE.value}'"
+                    )
+            elif node.kind == NodeKind.UNDERSTAND:
+                if not any(slot.role in IMAGE_SOURCE_ROLES for slot in node.inputs):
+                    raise ValueError(
+                        f"understand node '{node.node_id}' must consume an image role such as primary_input, "
+                        "edited_image, or composed_image"
+                    )
+                if not any(slot.role in UNDERSTAND_OUTPUT_ROLES for slot in node.outputs):
+                    raise ValueError(
+                        f"understand node '{node.node_id}' must output role "
+                        f"'{ArtifactRole.ANALYSIS.value}' or '{ArtifactRole.SCENE_UNDERSTANDING.value}'"
+                    )
+            elif node.kind == NodeKind.SCORE:
+                if not any(slot.role in IMAGE_SOURCE_ROLES for slot in node.inputs):
+                    raise ValueError(
+                        f"score node '{node.node_id}' must consume an image role such as primary_input, "
+                        "edited_image, or composed_image"
+                    )
+                if not any(slot.role in SCORE_OUTPUT_ROLES for slot in node.outputs):
+                    raise ValueError(
+                        f"score node '{node.node_id}' must output role "
+                        f"'{ArtifactRole.SCORE.value}' or '{ArtifactRole.SCORE_ARTIFACT.value}'"
+                    )
 
     @staticmethod
     def _validate_subject_extraction(plan: DAGPlan, request: PlanAgentRequest) -> None:
@@ -207,7 +291,7 @@ class PlanAgent:
                 )
             if not any(slot.role == EXTRACT_OUTPUT_ROLE for node in matches for slot in node.outputs):
                 raise ValueError(
-                    f"extract_subject node for '{artifact.artifact_id}' must output role '{EXTRACT_OUTPUT_ROLE}'"
+                    f"extract_subject node for '{artifact.artifact_id}' must output role '{EXTRACT_OUTPUT_ROLE.value}'"
                 )
 
     @staticmethod
@@ -248,7 +332,7 @@ class PlanAgent:
                 )
             if not any(slot.role == EXTRACT_OUTPUT_ROLE for slot in node.inputs):
                 raise ValueError(
-                    f"compose_scene node '{node.node_id}' must consume role '{EXTRACT_OUTPUT_ROLE}'"
+                    f"compose_scene node '{node.node_id}' must consume role '{EXTRACT_OUTPUT_ROLE.value}'"
                 )
             if not any(slot.role == BACKGROUND_OUTPUT_ROLE for slot in node.inputs):
                 upstream_background = any(
@@ -257,11 +341,11 @@ class PlanAgent:
                 )
                 if not upstream_background:
                     raise ValueError(
-                        f"compose_scene node '{node.node_id}' must consume role '{BACKGROUND_OUTPUT_ROLE}'"
+                        f"compose_scene node '{node.node_id}' must consume role '{BACKGROUND_OUTPUT_ROLE.value}'"
                     )
             if not any(slot.role == COMPOSE_OUTPUT_ROLE for slot in node.outputs):
                 raise ValueError(
-                    f"compose_scene node '{node.node_id}' must output role '{COMPOSE_OUTPUT_ROLE}'"
+                    f"compose_scene node '{node.node_id}' must output role '{COMPOSE_OUTPUT_ROLE.value}'"
                 )
 
     @staticmethod
@@ -279,13 +363,14 @@ class PlanAgent:
                 raise ValueError(
                     f"polish_image node '{node.node_id}' must depend on a compose_scene node"
                 )
-            if not any(slot.role in {COMPOSE_OUTPUT_ROLE, "edited_image"} for slot in node.inputs):
+            if not any(slot.role in {COMPOSE_OUTPUT_ROLE, EDIT_OUTPUT_ROLE} for slot in node.inputs):
                 raise ValueError(
-                    f"polish_image node '{node.node_id}' must consume role '{COMPOSE_OUTPUT_ROLE}' or 'edited_image'"
+                    f"polish_image node '{node.node_id}' must consume role "
+                    f"'{COMPOSE_OUTPUT_ROLE.value}' or '{EDIT_OUTPUT_ROLE.value}'"
                 )
             if not any(slot.role == FINAL_OUTPUT_ROLE for slot in node.outputs):
                 raise ValueError(
-                    f"polish_image node '{node.node_id}' must output role '{FINAL_OUTPUT_ROLE}'"
+                    f"polish_image node '{node.node_id}' must output role '{FINAL_OUTPUT_ROLE.value}'"
                 )
 
     @staticmethod

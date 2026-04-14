@@ -7,7 +7,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 
 def _bootstrap_package() -> None:
@@ -412,6 +412,59 @@ class PlanAgentTests(unittest.IsolatedAsyncioTestCase):
             agent._validate_plan(normalized, request)
 
         self._log_line("Invalid plan was correctly rejected.")
+
+    async def test_slot_spec_rejects_role_outside_controlled_vocabulary(self) -> None:
+        self._log_line("Verifying SlotSpec rejects an out-of-vocabulary role...")
+        with self.assertRaises(ValidationError):
+            SlotSpec(name="source_image", role="base_image")
+
+    async def test_local_semantic_validation_rejects_non_image_edit_input_role(self) -> None:
+        request = PlanAgentRequest(
+            workflow_id="wf_single_edit",
+            goal="Edit one image into a final image.",
+            user_prompt="Make the single input image warmer and more polished.",
+            input_artifacts=[
+                ArtifactManifest(
+                    artifact_id="input_image",
+                    artifact_type=ArtifactType.IMAGE,
+                    uri_or_value="/tmp/input.png",
+                    input_role=InputArtifactRole.PRIMARY_INPUT,
+                    description="Single input image.",
+                )
+            ],
+            artifact_summaries=[
+                ArtifactSummary(
+                    artifact_id="summary_input_image",
+                    source_artifact_id="input_image",
+                    description="A single portrait image ready for editing.",
+                )
+            ],
+        )
+        invalid_plan = DAGPlan(
+            workflow_id="wf_single_edit",
+            plan_id="draft_invalid_edit",
+            version=1,
+            goal="draft invalid edit",
+            nodes=[
+                TaskNode(
+                    node_id="node_edit_invalid",
+                    kind=NodeKind.EDIT,
+                    goal="Edit input_image into a final polished image.",
+                    inputs=[SlotSpec(name="source_image", role="caption")],
+                    outputs=[SlotSpec(name="final_image", role="final_image")],
+                    success=SuccessCriteria(required_outputs=["final_image"]),
+                )
+            ],
+        )
+        agent = PlanAgent(llm=_NeverCalledLLM())
+
+        self._log_json("PLAN AGENT SINGLE-EDIT INVALID REQUEST", request.model_dump(mode="json"))
+        self._log_json("PLAN AGENT SINGLE-EDIT INVALID PLAN", invalid_plan.model_dump(mode="json"))
+
+        normalized = agent._normalize_plan(invalid_plan, request)
+
+        with self.assertRaisesRegex(ValueError, "must consume an image role"):
+            agent._validate_plan(normalized, request)
 
     async def test_real_plan_agent_prompt_group_photo(self) -> None:
         if os.environ.get("PLAN_AGENT_REAL", "").lower() not in {"1", "true", "yes"}:

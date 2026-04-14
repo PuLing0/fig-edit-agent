@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import Field, PositiveInt, model_validator
 
 from .base import Identifier, NonEmptyStr, StrictSchema, utc_now
-from .enums import AttemptStatus, EvaluationDecision, EvaluationStatus, FailureType, NodeKind, ReplanScope
+from .enums import ArtifactRole, AttemptStatus, EvaluationDecision, EvaluationStatus, FailureType, NodeKind, ReplanScope
 from .plan import SlotSpec, SuccessCriteria
 
 
@@ -16,7 +16,7 @@ class ArtifactBinding(StrictSchema):
     """Runtime binding between a logical slot and a concrete artifact id."""
 
     spec_name: NonEmptyStr = Field(description="Slot name from the plan.")
-    role: NonEmptyStr = Field(description="Semantic role copied from the slot.")
+    role: ArtifactRole = Field(description="Semantic role copied from the slot.")
     artifact_id: Identifier = Field(description="Concrete artifact id bound to the slot.")
 
 

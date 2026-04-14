@@ -3,6 +3,7 @@
 from .artifact import Artifact
 from .base import Identifier, NonEmptyStr, StrictSchema, UriStr, utc_now
 from .enums import (
+    ArtifactRole,
     ArtifactType,
     AttemptStatus,
     EvaluationDecision,
@@ -35,6 +36,7 @@ __all__ = [
     "Artifact",
     "ArtifactManifest",
     "ArtifactBinding",
+    "ArtifactRole",
     "ArtifactSummary",
     "ArtifactType",
     "AttemptStatus",

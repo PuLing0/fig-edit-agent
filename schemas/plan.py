@@ -8,14 +8,16 @@ from datetime import datetime
 from pydantic import Field, PositiveInt, model_validator
 
 from .base import Identifier, NonEmptyStr, StrictSchema, utc_now
-from .enums import NodeKind
+from .enums import ArtifactRole, NodeKind
 
 
 class SlotSpec(StrictSchema):
     """Logical input or output slot inside a task node."""
 
     name: NonEmptyStr = Field(description="Stable slot name used for exact runtime binding.")
-    role: NonEmptyStr = Field(description="Semantic role of the slot, such as base_image or subject_mask.")
+    role: ArtifactRole = Field(
+        description="Semantic role of the slot, such as primary_input, edited_image, or subject_mask."
+    )
     required: bool = Field(default=True, description="Whether this slot must be bound for successful execution.")
     multiple: bool = Field(default=False, description="Whether this slot accepts multiple bound artifacts.")
 
