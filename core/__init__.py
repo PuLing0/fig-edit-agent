@@ -23,6 +23,21 @@ def __getattr__(name: str):
             "PlanAgentConfig": PlanAgentConfig,
         }
         return exports[name]
+    if name in {"Orchestrator", "OrchestratorConfig", "OrchestratorInputArtifact", "WorkflowRunResult"}:
+        from .orchestrator import (
+            Orchestrator,
+            OrchestratorConfig,
+            OrchestratorInputArtifact,
+            WorkflowRunResult,
+        )
+
+        exports = {
+            "Orchestrator": Orchestrator,
+            "OrchestratorConfig": OrchestratorConfig,
+            "OrchestratorInputArtifact": OrchestratorInputArtifact,
+            "WorkflowRunResult": WorkflowRunResult,
+        }
+        return exports[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -32,8 +47,12 @@ __all__ = [
     "ExecuteAgentConfig",
     "FireRedBackendError",
     "LLMClient",
+    "Orchestrator",
+    "OrchestratorConfig",
+    "OrchestratorInputArtifact",
     "PlanAgent",
     "PlanAgentConfig",
+    "WorkflowRunResult",
     "backend_config_snapshot",
     "edit_images",
     "load_pipeline",
